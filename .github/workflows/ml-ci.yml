@@ -1,32 +1,27 @@
-name: Student Result ML CI-CD
+name: Student Result ML GHCR Publish
 
 on:
   push:
-    branches:
-      - main
-  pull_request:
     branches:
       - main
   workflow_dispatch:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
-  train-test-containerize:
+  build-publish-ghcr:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Upgrade pip
-        run: python -m pip install --upgrade pip
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -40,43 +35,54 @@ jobs:
       - name: Run automated tests
         run: python -m unittest discover -v
 
-      - name: Build Docker image
-        run: docker build -t student-result-ml:${{ github.sha }} .
-
-      - name: Start Docker container
+      - name: Build Practical-7 Docker image
         run: |
-          docker run -d \
-            --name student-result-ml-container \
-            -p 5000:5000 \
-            student-result-ml:${{ github.sha }}
+          docker build -t student-result-prediction:latest .
+          docker images
 
-      - name: Wait for application to become ready
+      - name: Step 4 - Authenticate Docker to GHCR
         run: |
-          for i in {1..15}; do
-            if curl --fail --silent http://localhost:5000/health; then
-              echo "Application is ready."
-              exit 0
-            fi
-            echo "Waiting for application... attempt $i"
-            sleep 2
-          done
-          docker logs student-result-ml-container
-          exit 1
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u karthik250905-design --password-stdin
 
-      - name: Test prediction endpoint
+      - name: Step 5 - Tag image for GHCR (v1 and latest)
         run: |
-          response=$(curl --fail --silent --show-error \
+          docker tag student-result-prediction:latest ghcr.io/karthik250905-design/student-result-prediction:v1
+          docker tag student-result-prediction:latest ghcr.io/karthik250905-design/student-result-prediction:latest
+          docker images
+
+      - name: Step 6 & 7 - Push v1 and latest tags to GHCR
+        run: |
+          docker push ghcr.io/karthik250905-design/student-result-prediction:v1
+          docker push ghcr.io/karthik250905-design/student-result-prediction:latest
+
+      - name: Step 9 - Pull versioned image from GHCR
+        run: |
+          docker pull ghcr.io/karthik250905-design/student-result-prediction:v1
+
+      - name: Step 10 - Run container from GHCR image
+        run: |
+          docker run -d --name student-result-from-ghcr -p 5000:5000 ghcr.io/karthik250905-design/student-result-prediction:v1
+          sleep 3
+          docker ps
+
+      - name: Step 11 - Re-test Health and Prediction API on GHCR container
+        run: |
+          curl --fail --silent http://localhost:5000/health
+          echo ""
+          curl --fail --silent --show-error \
             -X POST \
             -H "Content-Type: application/json" \
             -d '{"attendance":90,"internal_marks":85,"assignment_marks":88,"previous_score":80}' \
-            http://localhost:5000/predict)
-          echo "Prediction response: $response"
-          echo "$response" | grep -q '"prediction"'
+            http://localhost:5000/predict
+          echo ""
 
-      - name: Show Docker container logs
-        if: always()
-        run: docker logs student-result-ml-container || true
+      - name: Step 12 - Inspect GHCR image metadata
+        run: |
+          docker inspect ghcr.io/karthik250905-design/student-result-prediction:v1
 
-      - name: Stop and remove Docker container
+      - name: Step 13 & 14 - Clean up container and log out from GHCR
         if: always()
-        run: docker rm -f student-result-ml-container || true
+        run: |
+          docker stop student-result-from-ghcr || true
+          docker rm student-result-from-ghcr || true
+          docker logout ghcr.io || true
