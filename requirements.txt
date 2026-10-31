@@ -6,3 +6,4 @@ flask
 fastapi
 uvicorn
 pydantic
+prometheus-client
