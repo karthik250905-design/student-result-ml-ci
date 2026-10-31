@@ -1,53 +1,96 @@
-from pathlib import Path
-import os
+import logging
+import sys
+import time
+import uuid
 import joblib
 import pandas as pd
-from fastapi import FastAPI
-from pydantic import BaseModel, Field
-import uvicorn
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
+from pydantic import BaseModel
 
-app = FastAPI(
-    title="Student Result Prediction API",
-    description="MLOps Student Result Prediction Service deployed from GHCR to Render",
-    version="1.0.0"
+# Step 4: Configure the Application Logger
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+    force=True,
 )
+logger = logging.getLogger("student-result-api")
 
-MODEL_PATH = Path("student_result_model.pkl")
+MODEL_FILE = "student_result_model.pkl"
 
-FEATURES = [
-    "attendance",
-    "internal_marks",
-    "assignment_marks",
-    "previous_score"
-]
+# Step 5: Log Model Loading
+try:
+    model = joblib.load(MODEL_FILE)
+    logger.info("event=model_loaded model_file=%s", MODEL_FILE)
+except Exception:
+    logger.exception("event=model_load_failed model_file=%s", MODEL_FILE)
+    raise
 
-
-class StudentInput(BaseModel):
-    attendance: float = Field(90, example=90)
-    internal_marks: float = Field(85, example=85)
-    assignment_marks: float = Field(88, example=88)
-    previous_score: float = Field(80, example=80)
+app = FastAPI(title="Student Result Prediction API")
 
 
-def load_model():
-    if not MODEL_PATH.exists():
-        raise FileNotFoundError(
-            "student_result_model.pkl was not found. "
-            "Run the training pipeline first."
+class StudentResultInput(BaseModel):
+    attendance: float
+    internal_marks: float
+    assignment_marks: float
+    previous_score: float
+
+
+# Step 6: Add Request/Response Logging Middleware
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    start = time.perf_counter()
+
+    try:
+        response = await call_next(request)
+        duration_ms = (time.perf_counter() - start) * 1000
+        level = logging.WARNING if response.status_code >= 400 else logging.INFO
+
+        logger.log(
+            level,
+            "event=http_request request_id=%s method=%s path=%s status=%s duration_ms=%.2f",
+            request_id,
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms,
         )
-    return joblib.load(MODEL_PATH)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+    except Exception:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.exception(
+            "event=http_request_failed request_id=%s method=%s path=%s duration_ms=%.2f",
+            request_id,
+            request.method,
+            request.url.path,
+            duration_ms,
+        )
+        raise
 
 
+# Step 7: Log FastAPI Validation Failures
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    fields = [
+        ".".join(str(part) for part in error.get("loc", []))
+        for error in exc.errors()
+    ]
+    logger.warning(
+        "event=validation_error path=%s field_locations=%s error_count=%s",
+        request.url.path,
+        fields,
+        len(exc.errors()),
+    )
+    return await request_validation_exception_handler(request, exc)
+
+
+# Step 9: Health Endpoint
 @app.get("/")
-def root():
-    return {
-        "service": "student-result-prediction",
-        "status": "running",
-        "version": "1.0.0",
-        "message": "Student Result Prediction API is live on Render"
-    }
-
-
 @app.get("/health")
 def health_check():
     return {
@@ -56,25 +99,45 @@ def health_check():
     }
 
 
+# Step 8: Add Safe Prediction Logging
+SAFE_INPUT_FIELDS = set()
+
+
 @app.post("/predict")
-def predict(payload: StudentInput):
-    sample = pd.DataFrame([{
-        "attendance": payload.attendance,
-        "internal_marks": payload.internal_marks,
-        "assignment_marks": payload.assignment_marks,
-        "previous_score": payload.previous_score
-    }])
+def predict(data: StudentResultInput):
+    try:
+        payload = data.model_dump() if hasattr(data, "model_dump") else data.dict()
+        safe_input = {
+            key: value
+            for key, value in payload.items()
+            if key in SAFE_INPUT_FIELDS
+        }
 
-    model = load_model()
-    prediction_code = int(model.predict(sample)[0])
-    prediction = "PASS" if prediction_code == 1 else "FAIL"
+        logger.info(
+            "event=prediction_request feature_names=%s safe_input=%s",
+            sorted(payload.keys()),
+            safe_input,
+        )
 
-    return {
-        "prediction": prediction,
-        "prediction_code": prediction_code
-    }
+        features_order = [
+            "attendance",
+            "internal_marks",
+            "assignment_marks",
+            "previous_score",
+        ]
+        input_df = pd.DataFrame([{k: payload[k] for k in features_order}])
+        prediction_code = int(model.predict(input_df)[0])
+        prediction_label = "PASS" if prediction_code == 1 else "FAIL"
 
+        logger.info(
+            "event=prediction_success prediction=%s",
+            prediction_label,
+        )
+        return {
+            "prediction": prediction_label,
+            "prediction_code": prediction_code,
+        }
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("app:app", host="0.0.0.0", port=port)
+    except Exception:
+        logger.exception("event=prediction_failed")
+        raise HTTPException(status_code=500, detail="Prediction failed")
