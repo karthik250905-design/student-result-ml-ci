@@ -10,6 +10,6 @@ RUN python train_model.py
 
 COPY app.py .
 
-EXPOSE 5000
+EXPOSE 8000
 
-CMD ["python", "app.py"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
