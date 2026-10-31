@@ -31,10 +31,11 @@ jobs:
             -p 8000:8000 \
             $IMAGE_NAME:ci
 
-      - name: Test API health endpoint
+      - name: Test API health endpoint (HTTP 200)
         run: |
           for attempt in {1..20}; do
             if curl --fail --silent http://localhost:8000/health; then
+              echo ""
               echo "Health check passed."
               exit 0
             fi
@@ -45,12 +46,37 @@ jobs:
           docker logs student-result-ci
           exit 1
 
-      - name: Test prediction endpoint
+      - name: Test valid prediction request (HTTP 200)
         run: |
-          curl --fail --silent \
+          curl --fail --silent --show-error \
             -X POST http://localhost:8000/predict \
             -H "Content-Type: application/json" \
-            --data @test_payload.json
+            -d '{"attendance":90,"internal_marks":85,"assignment_marks":88,"previous_score":80}'
+          echo ""
+
+      - name: Simulate invalid request for validation warning (HTTP 422)
+        run: |
+          status=$(curl -s -o /tmp/val_err.json -w "%{http_code}" \
+            -X POST http://localhost:8000/predict \
+            -H "Content-Type: application/json" \
+            -d '{"attendance":"not-a-number","internal_marks":85}')
+          echo "HTTP Status: $status"
+          cat /tmp/val_err.json
+          echo ""
+          test "$status" = "422"
+
+      - name: Simulate missing route request (HTTP 404)
+        run: |
+          status=$(curl -s -o /tmp/not_found.json -w "%{http_code}" \
+            http://localhost:8000/not-a-real-route)
+          echo "HTTP Status: $status"
+          cat /tmp/not_found.json
+          echo ""
+          test "$status" = "404"
+
+      - name: Inspect application runtime logs (200, 422, 404 events)
+        if: always()
+        run: docker logs student-result-ci
 
       - name: Remove test container
         if: always()
