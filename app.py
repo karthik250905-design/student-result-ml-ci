@@ -1,9 +1,16 @@
 from pathlib import Path
+import os
 import joblib
 import pandas as pd
-from flask import Flask, jsonify, request
+from fastapi import FastAPI
+from pydantic import BaseModel, Field
+import uvicorn
 
-app = Flask(__name__)
+app = FastAPI(
+    title="Student Result Prediction API",
+    description="MLOps Student Result Prediction Service deployed from GHCR to Render",
+    version="1.0.0"
+)
 
 MODEL_PATH = Path("student_result_model.pkl")
 
@@ -13,6 +20,13 @@ FEATURES = [
     "assignment_marks",
     "previous_score"
 ]
+
+
+class StudentInput(BaseModel):
+    attendance: float = Field(90, example=90)
+    internal_marks: float = Field(85, example=85)
+    assignment_marks: float = Field(88, example=88)
+    previous_score: float = Field(80, example=80)
 
 
 def load_model():
@@ -25,44 +39,42 @@ def load_model():
 
 
 @app.get("/")
+def root():
+    return {
+        "service": "student-result-prediction",
+        "status": "running",
+        "version": "1.0.0",
+        "message": "Student Result Prediction API is live on Render"
+    }
+
+
 @app.get("/health")
 def health_check():
-    return jsonify({
+    return {
         "status": "ok",
         "service": "student-result-prediction"
-    })
+    }
 
 
 @app.post("/predict")
-def predict():
-    data = request.get_json(silent=True)
-    if not data:
-        return jsonify({"error": "JSON request body is required"}), 400
-
-    missing_fields = [
-        feature for feature in FEATURES
-        if feature not in data
-    ]
-    if missing_fields:
-        return jsonify({
-            "error": "Missing required fields",
-            "missing_fields": missing_fields
-        }), 400
-
+def predict(payload: StudentInput):
     sample = pd.DataFrame([{
-        feature: data[feature]
-        for feature in FEATURES
+        "attendance": payload.attendance,
+        "internal_marks": payload.internal_marks,
+        "assignment_marks": payload.assignment_marks,
+        "previous_score": payload.previous_score
     }])
 
     model = load_model()
     prediction_code = int(model.predict(sample)[0])
     prediction = "PASS" if prediction_code == 1 else "FAIL"
 
-    return jsonify({
+    return {
         "prediction": prediction,
         "prediction_code": prediction_code
-    })
+    }
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("app:app", host="0.0.0.0", port=port)
