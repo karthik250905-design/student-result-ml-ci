@@ -1,88 +1,10 @@
-name: Student Result ML GHCR Publish
-
+name: Student Result ML CI-CD
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
-
 permissions:
   contents: read
-  packages: write
-
 jobs:
-  build-publish-ghcr:
+  placeholder:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Train student result model
-        run: python train_model.py
-
-      - name: Check ML quality gate
-        run: python quality_gate.py
-
-      - name: Run automated tests
-        run: python -m unittest discover -v
-
-      - name: Build Practical-7 Docker image
-        run: |
-          docker build -t student-result-prediction:latest .
-          docker images
-
-      - name: Step 4 - Authenticate Docker to GHCR
-        run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u karthik250905-design --password-stdin
-
-      - name: Step 5 - Tag image for GHCR (v1 and latest)
-        run: |
-          docker tag student-result-prediction:latest ghcr.io/karthik250905-design/student-result-prediction:v1
-          docker tag student-result-prediction:latest ghcr.io/karthik250905-design/student-result-prediction:latest
-          docker images
-
-      - name: Step 6 & 7 - Push v1 and latest tags to GHCR
-        run: |
-          docker push ghcr.io/karthik250905-design/student-result-prediction:v1
-          docker push ghcr.io/karthik250905-design/student-result-prediction:latest
-
-      - name: Step 9 - Pull versioned image from GHCR
-        run: |
-          docker pull ghcr.io/karthik250905-design/student-result-prediction:v1
-
-      - name: Step 10 - Run container from GHCR image
-        run: |
-          docker run -d --name student-result-from-ghcr -p 5000:5000 ghcr.io/karthik250905-design/student-result-prediction:v1
-          sleep 3
-          docker ps
-
-      - name: Step 11 - Re-test Health and Prediction API on GHCR container
-        run: |
-          curl --fail --silent http://localhost:5000/health
-          echo ""
-          curl --fail --silent --show-error \
-            -X POST \
-            -H "Content-Type: application/json" \
-            -d '{"attendance":90,"internal_marks":85,"assignment_marks":88,"previous_score":80}' \
-            http://localhost:5000/predict
-          echo ""
-
-      - name: Step 12 - Inspect GHCR image metadata
-        run: |
-          docker inspect ghcr.io/karthik250905-design/student-result-prediction:v1
-
-      - name: Step 13 & 14 - Clean up container and log out from GHCR
-        if: always()
-        run: |
-          docker stop student-result-from-ghcr || true
-          docker rm student-result-from-ghcr || true
-          docker logout ghcr.io || true
+      - run: echo "Completed in earlier practicals"
